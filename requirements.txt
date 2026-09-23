@@ -1,0 +1,5 @@
+# GUI：PySide6（官方 Qt for Python 绑定）
+PySide6>=6.8
+
+# HTTP：参考项目用 HttpClient，这里用 requests（同步 + Session 复用连接）
+requests>=2.32

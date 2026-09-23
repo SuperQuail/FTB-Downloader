@@ -17,8 +17,10 @@
 
 from __future__ import annotations
 
+import json
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import requests
 
@@ -45,26 +47,49 @@ class FTBClient:
     def __init__(self, proxy: str | None = None, timeout: float = 60.0, retries: int = 3) -> None:
         self.timeout = timeout
         self.retries = retries
+        self.proxy = proxy
         self.log: LogFn | None = None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
-        if proxy:
-            self._session.proxies = {"http": proxy, "https": proxy}
+        self.set_proxy(proxy)
+
+    def set_proxy(self, proxy: str | None) -> None:
+        """换代理（设置页重新探测后调用）。"""
+        self.proxy = proxy
+        self._session.proxies = {"http": proxy, "https": proxy} if proxy else {}
 
     # ------------------------------------------------------------------ 基础
     def _emit(self, message: str) -> None:
         if self.log:
             self.log(message)
 
-    def _get_json(self, path: str) -> Any:
+    def _get_json(self, path: str, on_progress: Callable[[int, int], None] | None = None) -> Any:
+        """GET 一个 JSON 端点。
+
+        on_progress 只在需要下载大响应（文件清单，8 MB 起步）时传，
+        传了就走流式读取，按块回调 (已接收字节, 总字节)。
+        """
         url = API_BASE + path
         last_error: Exception | None = None
         for attempt in range(1, self.retries + 1):
             self._emit(f"GET {url}" + (f"（第 {attempt} 次重试）" if attempt > 1 else ""))
             try:
-                rsp = self._session.get(url, timeout=self.timeout)
-                rsp.raise_for_status()
-                data = rsp.json()
+                if on_progress is None:
+                    rsp = self._session.get(url, timeout=self.timeout)
+                    rsp.raise_for_status()
+                    data = rsp.json()
+                else:
+                    # 明确不要压缩，这样 Content-Length 就是实际字节数，进度才准
+                    rsp = self._session.get(
+                        url, timeout=self.timeout, stream=True, headers={"Accept-Encoding": "identity"}
+                    )
+                    rsp.raise_for_status()
+                    total = int(rsp.headers.get("Content-Length") or 0)
+                    buffer = bytearray()
+                    for chunk in rsp.iter_content(chunk_size=64 * 1024):
+                        buffer.extend(chunk)
+                        on_progress(len(buffer), total)
+                    data = json.loads(bytes(buffer))
             except Exception as exc:  # noqa: BLE001 - 网络异常种类太多，统一重试
                 last_error = exc
                 if attempt < self.retries:
@@ -95,9 +120,14 @@ class FTBClient:
     def info(self, pack_id: int) -> PackInfo:
         return PackInfo.from_json(self._get_json(f"/modpack/{pack_id}"))
 
-    def manifest(self, pack_id: int, version_id: int) -> ModpackManifest:
-        """拉取文件清单。这一步就是参考项目崩溃的地方，见 models/manifest.py 顶部注释。"""
-        return ModpackManifest.from_json(self._get_json(f"/modpack/{pack_id}/{version_id}"))
+    def manifest(
+        self,
+        pack_id: int,
+        version_id: int,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> ModpackManifest:
+        """拉取文件清单（8 MB 级）。这一步就是参考项目崩溃的地方，见 models/manifest.py 顶部注释。"""
+        return ModpackManifest.from_json(self._get_json(f"/modpack/{pack_id}/{version_id}", on_progress))
 
     def mod_info(self, sha1: str) -> list[dict[str, Any]]:
         """按 sha1 找可用的下载源（对照 FTBService.TryRecoverUnreachableFiles）。"""
@@ -107,7 +137,7 @@ class FTBClient:
     def close(self) -> None:
         self._session.close()
 
-    def __enter__(self) -> "FTBClient":
+    def __enter__(self) -> FTBClient:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

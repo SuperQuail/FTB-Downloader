@@ -1,0 +1,9 @@
+# Python 项目统一 LF，避免 Windows 上和 core.autocrlf 打架
+* text=auto eol=lf
+
+# 二进制别乱转换
+*.png binary
+*.webp binary
+*.jpg binary
+*.ico binary
+*.zip binary

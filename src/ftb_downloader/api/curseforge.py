@@ -11,7 +11,8 @@ projectID / fileID 写进 manifest.json 交给启动器。如果 FTB 清单里�
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 import requests
 
@@ -63,7 +64,7 @@ class CurseforgeClient:
     def close(self) -> None:
         self._session.close()
 
-    def __enter__(self) -> "CurseforgeClient":
+    def __enter__(self) -> CurseforgeClient:
         return self
 
     def __exit__(self, *exc_info: object) -> None:

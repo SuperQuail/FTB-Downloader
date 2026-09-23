@@ -13,8 +13,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import quote
 
 #: CurseForge CDN 直链规则（CurseforgeUtils.GetDownloadUrl）
@@ -65,7 +66,7 @@ class CurseforgeRef:
     file: int = 0
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any] | None) -> "CurseforgeRef | None":
+    def from_json(cls, data: Mapping[str, Any] | None) -> CurseforgeRef | None:
         if not data:
             return None
         return cls(project=as_int(data.get("project")), file=as_int(data.get("file")))
@@ -92,7 +93,7 @@ class ManifestFile:
     curseforge: CurseforgeRef | None
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any]) -> "ManifestFile":
+    def from_json(cls, data: Mapping[str, Any]) -> ManifestFile:
         return cls(
             id=as_int(data.get("id")),
             name=str(data.get("name") or ""),
@@ -155,7 +156,7 @@ class Specs:
     recommended: int = 0
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any] | None) -> "Specs":
+    def from_json(cls, data: Mapping[str, Any] | None) -> Specs:
         data = data or {}
         return cls(minimum=as_int(data.get("minimum")), recommended=as_int(data.get("recommended")))
 
@@ -167,7 +168,7 @@ class Target:
     version: str
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any]) -> "Target":
+    def from_json(cls, data: Mapping[str, Any]) -> Target:
         return cls(
             name=str(data.get("name") or ""),
             type=str(data.get("type") or ""),
@@ -191,7 +192,7 @@ class ModpackManifest:
     targets: list[Target] = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, data: Mapping[str, Any]) -> "ModpackManifest":
+    def from_json(cls, data: Mapping[str, Any]) -> ModpackManifest:
         return cls(
             id=as_int(data.get("id")),
             name=str(data.get("name") or ""),

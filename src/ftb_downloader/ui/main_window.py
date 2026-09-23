@@ -1,292 +1,327 @@
-"""主窗口。
+"""主窗口：左侧图标栏 + 顶栏（搜索 / GROUP BY / SORT BY）+ 页面堆栈。
 
-界面分三步（对齐参考项目 DefaultCommand 的交互顺序）：
-    ① 选整合包（输入 ID）→ ② 选版本 → ③ 选类型（客户端/服务端、标准包/完整包）→ 下载
-
-当前进度：①② 已经能真的调 FTB 接口并把清单读出来；③ 的下载与打包还没写，
-   见 README.md 的「下一步」。
+整体布局照着官方 FTB App 来：
+    ┌────┬──────────────────────────────────────────────┐
+    │ ＋ │  [搜索]                    GROUP BY   SORT BY │
+    │ ⬇  ├──────────────────────────────────────────────┤
+    │ 🏠 │  正在准备                                     │
+    │ ▦  │  ┌─ 大卡片（进度 / 速度）─┐                   │
+    │ ⚙  │  我的整合包                                   │
+    │ ⓘ  │  ┌─tile─┐ ┌─tile─┐ ┌─tile─┐                  │
+    └────┴──────────────────────────────────────────────┘
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
-
-from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
-    QComboBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
-    QPushButton,
-    QRadioButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from ftb_downloader import __version__
 from ftb_downloader.api.ftb import FTBClient
-from ftb_downloader.models.manifest import ModpackManifest
-from ftb_downloader.models.pack import PackInfo
 from ftb_downloader.net import system_proxy
+from ftb_downloader.services.library import Library, LibraryEntry
+from ftb_downloader.services.tasks import FeaturedTask, PreparedPack, PreparePackTask, SearchTask
+from ftb_downloader.ui.image_cache import ImageCache
+from ftb_downloader.ui.pages.about import AboutPage
+from ftb_downloader.ui.pages.discover import DiscoverPage
+from ftb_downloader.ui.pages.downloads import DownloadsPage
+from ftb_downloader.ui.pages.library import LibraryPage
+from ftb_downloader.ui.pages.settings import SettingsPage
+from ftb_downloader.ui.widgets.sidebar import Sidebar
+from ftb_downloader.ui.widgets.topbar import TopBar
 from ftb_downloader.util import human_size
 
+#: 页面顺序（= QStackedWidget 的下标）
+PAGE_ORDER = ["library", "discover", "downloads", "settings", "about"]
 
-class ApiTask(QThread):
-    """把可能很慢的接口调用丢到后台线程，避免界面卡死。"""
+#: 左侧栏图标
+RAIL_ITEMS = [
+    ("add", "plus", "添加整合包（按 ID）"),
+    ("downloads", "download", "下载"),
+    ("library", "home", "我的整合包"),
+    ("discover", "grid", "发现整合包"),
+    ("settings", "settings", "设置"),
+    ("about", "info", "关于"),
+]
 
-    succeeded = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, fn: Callable[[], Any], parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._fn = fn
-
-    def run(self) -> None:
-        try:
-            result = self._fn()
-        except Exception as exc:  # noqa: BLE001 - 任何异常都要显示到界面上
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
-        else:
-            self.succeeded.emit(result)
+SEARCH_PLACEHOLDER = {
+    "library": "在库里筛选（名称 / 版本 / ID）",
+    "discover": "搜索 FTB 整合包，或直接粘贴整合包 ID",
+    "downloads": "搜索 FTB 整合包，或直接粘贴整合包 ID",
+    "settings": "搜索 FTB 整合包，或直接粘贴整合包 ID",
+    "about": "搜索 FTB 整合包，或直接粘贴整合包 ID",
+}
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"FTB 整合包下载器 v{__version__}")
-        self.resize(900, 680)
+        self.setWindowTitle("FTB 整合包下载器")
+        self.resize(1180, 760)
 
         self.proxy = system_proxy()
         self.client = FTBClient(proxy=self.proxy)
-        self.client.log = self.log
+        self.library = Library()
+        self.image_cache = ImageCache(proxy=self.proxy)
 
-        self.pack_info: PackInfo | None = None
-        self.manifest: ModpackManifest | None = None
-        self._task: ApiTask | None = None
+        self._tasks: list = []
+        self._preparing: set[int] = set()
+        self._featured_loaded = False
+        self._current_page = "library"
 
         self._build_ui()
-
-        self.log(f"代理：{self.proxy}（来自系统设置/环境变量）" if self.proxy else "代理：未配置，直连")
-        self.log("用法：输入整合包 ID（FTB Skies 2: Aero 是 134）→ 获取版本列表 → 选版本 → 读取文件清单")
+        self._switch_page("library")
+        self.set_status(
+            f"代理：{self.proxy}" if self.proxy else "没有检测到代理，直连 FTB 接口"
+        )
 
     # ------------------------------------------------------------- UI 搭建
     def _build_ui(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setSpacing(8)
 
-        # ① 整合包 ID
-        box_pack = QGroupBox("① 整合包")
-        row_pack = QHBoxLayout(box_pack)
-        row_pack.addWidget(QLabel("整合包 ID："))
-        self.edit_pack_id = QLineEdit("134")
-        self.edit_pack_id.setFixedWidth(110)
-        self.edit_pack_id.returnPressed.connect(self.on_fetch_info)
-        row_pack.addWidget(self.edit_pack_id)
-        self.btn_info = QPushButton("获取版本列表")
-        self.btn_info.clicked.connect(self.on_fetch_info)
-        row_pack.addWidget(self.btn_info)
-        row_pack.addStretch(1)
-        root.addWidget(box_pack)
+        row = QHBoxLayout(central)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
 
-        # 包信息
-        self.lbl_pack = QLabel("（还没获取）")
-        self.lbl_pack.setWordWrap(True)
-        self.lbl_pack.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        root.addWidget(self.lbl_pack)
+        self.rail = Sidebar(central)
+        for key, icon_name, tooltip in RAIL_ITEMS:
+            if key in ("settings",):
+                self.rail.add_spacer()
+            self.rail.add_item(key, icon_name, tooltip)
+        self.rail.selected.connect(self._on_rail)
+        row.addWidget(self.rail)
 
-        # ② 版本与类型
-        box_ver = QGroupBox("② 版本与类型")
-        form = QFormLayout(box_ver)
+        right = QWidget(central)
+        right_box = QVBoxLayout(right)
+        right_box.setContentsMargins(0, 0, 0, 0)
+        right_box.setSpacing(0)
 
-        self.combo_version = QComboBox()
-        self.combo_version.setMinimumWidth(320)
-        form.addRow("版本：", self.combo_version)
+        self.topbar = TopBar(right)
+        self.topbar.search_changed.connect(self._on_search_changed)
+        self.topbar.search_submitted.connect(self._on_search_submitted)
+        self.topbar.group_changed.connect(self._on_group_changed)
+        self.topbar.sort_changed.connect(self._on_sort_changed)
+        right_box.addWidget(self.topbar)
 
-        type_row = QHBoxLayout()
-        self.radio_client = QRadioButton("客户端")
-        self.radio_server = QRadioButton("服务端")
-        self.radio_client.setChecked(True)
-        self.group_side = QButtonGroup(self)
-        self.group_side.addButton(self.radio_client)
-        self.group_side.addButton(self.radio_server)
-        type_row.addWidget(self.radio_client)
-        type_row.addWidget(self.radio_server)
-        type_row.addSpacing(24)
-        self.check_full = QCheckBox("完整包（把 CurseForge 模组也打进 zip）")
-        type_row.addWidget(self.check_full)
-        type_row.addStretch(1)
-        form.addRow("类型：", type_row)
+        self.stack = QStackedWidget(right)
+        right_box.addWidget(self.stack, 1)
+        row.addWidget(right, 1)
 
-        btn_row = QHBoxLayout()
-        self.btn_manifest = QPushButton("读取文件清单")
-        self.btn_manifest.clicked.connect(self.on_fetch_manifest)
-        btn_row.addWidget(self.btn_manifest)
-        self.btn_download = QPushButton("开始下载")
-        self.btn_download.setEnabled(False)
-        self.btn_download.clicked.connect(self.on_download)
-        btn_row.addWidget(self.btn_download)
-        btn_row.addStretch(1)
-        form.addRow("", btn_row)
+        self.page_library = LibraryPage(self)
+        self.page_discover = DiscoverPage(self)
+        self.page_downloads = DownloadsPage(self)
+        self.page_settings = SettingsPage(self)
+        self.page_about = AboutPage(self)
+        for page in (self.page_library, self.page_discover, self.page_downloads, self.page_settings, self.page_about):
+            self.stack.addWidget(page)
 
-        root.addWidget(box_ver)
+        self.page_library.card_closed.connect(self.remove_pack)
+        self.page_library.tile_clicked.connect(self.show_pack_detail)
+        self.page_library.tile_removed.connect(self.remove_pack)
+        self.page_downloads.card_closed.connect(self.remove_pack)
+        self.page_discover.tile_clicked.connect(self._on_discover_clicked)
 
-        # ③ 统计
-        box_stats = QGroupBox("③ 清单统计")
-        stats_form = QFormLayout(box_stats)
-        self.stat_labels: dict[str, QLabel] = {}
-        for key, title in (
-            ("files", "文件总数"),
-            ("client", "客户端文件"),
-            ("server", "服务端文件"),
-            ("cf_mods", "CurseForge 模组"),
-            ("to_download", "需要下载的文件"),
-            ("size", "清单总大小"),
-            ("runtime", "运行环境"),
-        ):
-            label = QLabel("-")
-            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            self.stat_labels[key] = label
-            stats_form.addRow(f"{title}：", label)
-        root.addWidget(box_stats)
+        # 下拉框的默认项要跟页面里的默认排序 / 分组一致
+        self.page_library.set_group(self.topbar.combo_group.currentData())
+        self.page_library.set_sort(self.topbar.combo_sort.currentData())
 
-        # 日志
-        box_log = QGroupBox("日志")
-        log_layout = QVBoxLayout(box_log)
-        self.text_log = QPlainTextEdit()
-        self.text_log.setReadOnly(True)
-        self.text_log.setMaximumBlockCount(3000)
-        self.text_log.setPlaceholderText("接口调用日志会显示在这里……")
-        log_layout.addWidget(self.text_log)
-        root.addWidget(box_log, 1)
+        self.statusBar().showMessage("就绪")
 
-    # ------------------------------------------------------------- 通用动作
-    def log(self, message: str) -> None:
-        self.text_log.appendPlainText(message)
-
-    def _set_busy(self, busy: bool) -> None:
-        self.btn_info.setEnabled(not busy)
-        self.btn_manifest.setEnabled(not busy)
-        self.btn_download.setEnabled(not busy and self.manifest is not None)
-        _set_busy_cursor(busy)
-
-    def _run(self, fn: Callable[[], Any], on_ok: Callable[[Any], None]) -> None:
-        if self._task is not None and self._task.isRunning():
-            QMessageBox.information(self, "稍等", "上一个请求还没结束。")
+    # ------------------------------------------------------------- 页面切换
+    def _on_rail(self, key: str) -> None:
+        if key == "add":
+            self._switch_page("discover")
+            self.topbar.search.setFocus()
+            self.set_status("输入整合包 ID（例如 FTB Skies 2: Aero 是 134）后回车即可添加")
             return
-        self._set_busy(True)
-        task = ApiTask(fn, self)
-        task.succeeded.connect(on_ok)
-        task.failed.connect(self._on_failed)
-        task.finished.connect(lambda: self._set_busy(False))
-        self._task = task
+        self._switch_page(key)
+
+    def _switch_page(self, key: str) -> None:
+        self._current_page = key
+        self.stack.setCurrentIndex(PAGE_ORDER.index(key))
+        self.rail.set_current(key)
+        self.topbar.set_filters_visible(key == "library")
+        self.topbar.set_placeholder(SEARCH_PLACEHOLDER.get(key, ""))
+        if key == "library":
+            self.page_library.refresh()
+        elif key == "downloads":
+            self.page_downloads.refresh()
+        elif key == "discover":
+            self._load_featured()
+
+    # ------------------------------------------------------------- 顶栏行为
+    def _on_search_changed(self, text: str) -> None:
+        if self._current_page == "library":
+            self.page_library.set_filter(text)
+
+    def _on_search_submitted(self, text: str) -> None:
+        if not text:
+            return
+        if text.isdigit():
+            self.add_pack(int(text))
+            return
+        self._switch_page("discover")
+        self.page_discover.set_status(f"正在搜索「{text}」……")
+        task = SearchTask(self.client, text)
+        task.succeeded.connect(lambda packs: self.page_discover.show_summaries(packs, f"「{text}」的搜索结果"))
+        task.failed.connect(self._on_task_failed)
+        self._track(task)
         task.start()
 
-    def _on_failed(self, message: str) -> None:
-        self.log(f"[失败] {message}")
+    def _on_group_changed(self, key: str) -> None:
+        self.page_library.set_group(key)
+
+    def _on_sort_changed(self, key: str) -> None:
+        self.page_library.set_sort(key)
+
+    # --------------------------------------------------------------- 发现页
+    def _load_featured(self) -> None:
+        if self._featured_loaded:
+            return
+        self._featured_loaded = True
+        self.page_discover.set_status("正在获取热门整合包……")
+        task = FeaturedTask(self.client, 12)
+        task.progress.connect(lambda done, total: self.page_discover.set_status(f"正在获取热门整合包 {done}/{total}"))
+        task.succeeded.connect(lambda packs: self.page_discover.show_packs(packs, "热门整合包"))
+        task.failed.connect(self._on_task_failed)
+        self._track(task)
+        task.start()
+
+    def _on_discover_clicked(self, key: str) -> None:
+        self.add_pack(int(key))
+
+    # --------------------------------------------------------------- 添加包
+    def add_pack(self, pack_id: int, version_id: int = 0) -> None:
+        if pack_id in self._preparing:
+            self.set_status(f"整合包 {pack_id} 已经在处理中了")
+            return
+
+        entry = self.library.get(pack_id) or LibraryEntry(pack_id=pack_id)
+        entry.status = "preparing"
+        entry.message = "获取整合包信息"
+        if not entry.name:
+            entry.name = f"整合包 {pack_id}"
+        self.library.upsert(entry)
+        self._refresh_lists()
+        self.set_status(f"正在处理「{entry.name}」……")
+
+        task = PreparePackTask(self.client, pack_id, version_id or entry.version_id)
+        self._preparing.add(pack_id)
+        task.state.connect(lambda text, pid=pack_id: self._on_prepare_state(pid, text))
+        task.progress.connect(lambda value, speed, pid=pack_id: self._on_prepare_progress(pid, value, speed))
+        task.succeeded.connect(self._on_prepared)
+        task.failed.connect(lambda message, pid=pack_id: self._on_prepare_failed(pid, message))
+        self._track(task)
+        task.start()
+
+    def _refresh_lists(self) -> None:
+        self.page_library.refresh()
+        self.page_downloads.refresh()
+
+    def _on_prepare_state(self, pack_id: int, text: str) -> None:
+        entry = self.library.get(pack_id)
+        if entry is not None:
+            entry.message = text
+            self.library.upsert(entry)
+        self._refresh_lists()
+        self.set_status(f"{entry.name if entry else pack_id}：{text}")
+
+    def _on_prepare_progress(self, pack_id: int, value: float, speed: str) -> None:
+        for page in (self.page_library, self.page_downloads):
+            card = page.card(str(pack_id))
+            if card is not None:
+                card.show_progress(True)
+                card.set_progress(value, speed)
+                card.set_status(f"下载文件清单 {value * 100:.1f}%")
+
+    def _on_prepared(self, result: PreparedPack) -> None:
+        info, version, manifest = result.info, result.version, result.manifest
+        entry = self.library.get(info.id) or LibraryEntry(pack_id=info.id)
+        loader = manifest.mod_loader
+        entry.name = info.name
+        entry.version_id = version.id
+        entry.version_name = version.name
+        entry.icon_url = info.icon_url
+        entry.status = "ready"
+        entry.message = ""
+        entry.files = len(manifest.files)
+        entry.cf_mods = len(manifest.curseforge_mods)
+        entry.size = manifest.total_size
+        entry.game_version = manifest.game_version
+        entry.loader = f"{loader.name} {loader.version}" if loader else ""
+        entry.java = manifest.java_version
+        self.library.upsert(entry)
+
+        self._preparing.discard(info.id)
+        self._refresh_lists()
+        self.set_status(
+            f"「{info.name}」v{version.name} 已就绪：{entry.files:,} 个文件，"
+            f"CurseForge 模组 {entry.cf_mods:,} 个，{human_size(entry.size)}"
+        )
+
+    def _on_prepare_failed(self, pack_id: int, message: str) -> None:
+        entry = self.library.get(pack_id) or LibraryEntry(pack_id=pack_id)
+        entry.status = "error"
+        entry.message = message
+        self.library.upsert(entry)
+        self._preparing.discard(pack_id)
+        self._refresh_lists()
+        self.set_status(f"整合包 {pack_id} 出错：{message}")
+
+    # --------------------------------------------------------------- 其它
+    def remove_pack(self, key: str) -> None:
+        entry = self.library.entries.get(key)
+        if entry is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "移除整合包",
+            f"把「{entry.name}」从库里移除？（不会删除已经下载的文件）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.library.remove(key)
+            self._refresh_lists()
+            self.set_status(f"已移除「{entry.name}」")
+
+    def show_pack_detail(self, key: str) -> None:
+        entry = self.library.entries.get(key)
+        if entry is None:
+            return
+        text = "\n".join(
+            [
+                f"整合包：{entry.name}（ID {entry.pack_id}）",
+                f"版本：{entry.version_name or '-'}（version id {entry.version_id or '-'}）",
+                f"运行环境：MC {entry.game_version or '-'} / {entry.loader or '-'} / Java {entry.java or '-'}",
+                f"文件：{entry.files:,} 个（其中 CurseForge 模组 {entry.cf_mods:,} 个）",
+                f"清单总体积：{human_size(entry.size)}",
+                f"状态：{entry.status_label}",
+                "",
+                "下载与打包还没实现，下一步照参考项目的 FileDownloadService / PackService 来。",
+            ]
+        )
+        QMessageBox.information(self, entry.name or f"整合包 {entry.pack_id}", text)
+
+    def _on_task_failed(self, message: str) -> None:
+        self.set_status(f"出错了：{message}")
         QMessageBox.warning(self, "出错了", message)
 
-    # ------------------------------------------------------------- ① 版本列表
-    def on_fetch_info(self) -> None:
-        text = self.edit_pack_id.text().strip()
-        if not text.isdigit():
-            QMessageBox.warning(self, "输入有误", "整合包 ID 必须是数字。")
-            return
-        pack_id = int(text)
+    def set_status(self, text: str) -> None:
+        self.statusBar().showMessage(text)
 
-        def work() -> PackInfo:
-            return self.client.info(pack_id)
+    def _track(self, task) -> None:
+        """留住线程引用，跑完自动清掉（不然会被 GC）。"""
+        self._tasks.append(task)
 
-        self._run(work, self._on_info)
+        def _done() -> None:
+            if task in self._tasks:
+                self._tasks.remove(task)
 
-    def _on_info(self, info: PackInfo) -> None:
-        self.pack_info = info
-        self.manifest = None
-        self.stat_labels["files"].setText("-")
-
-        authors = "、".join(info.authors) or "未知"
-        tags = "、".join(info.tags) or "-"
-        self.lbl_pack.setText(
-            f"<b>{info.name}</b>（ID {info.id}）<br>"
-            f"作者：{authors}　标签：{tags}<br>"
-            f"简介：{info.synopsis}<br>"
-            f'<a href="{info.url}">{info.url}</a>'
-        )
-        self.lbl_pack.setOpenExternalLinks(True)
-
-        self.combo_version.clear()
-        for version in info.sorted_versions():
-            self.combo_version.addItem(version.label, version)
-        self.log(f"√ 获取到 {len(info.versions)} 个版本，最新：{info.latest_version.label if info.latest_version else '-'}")
-
-    # ------------------------------------------------------------- ② 文件清单
-    def on_fetch_manifest(self) -> None:
-        if self.pack_info is None:
-            QMessageBox.warning(self, "还没有整合包信息", "先点「获取版本列表」。")
-            return
-        version = self.combo_version.currentData()
-        if version is None:
-            QMessageBox.warning(self, "还没有版本", "先点「获取版本列表」。")
-            return
-
-        pack_id = self.pack_info.id
-        version_id = version.id
-        self.log(f"正在拉取清单 {pack_id}/{version_id}（整包几 MB，稍等）……")
-
-        def work() -> ModpackManifest:
-            return self.client.manifest(pack_id, version_id)
-
-        self._run(work, self._on_manifest)
-
-    def _on_manifest(self, manifest: ModpackManifest) -> None:
-        self.manifest = manifest
-
-        loader = manifest.mod_loader
-        runtime = (
-            f"MC {manifest.game_version}"
-            + (f" / {loader.name} {loader.version}" if loader else "")
-            + (f" / Java {manifest.java_version}" if manifest.java_version else "")
-        )
-        self.stat_labels["files"].setText(f"{len(manifest.files)}")
-        self.stat_labels["client"].setText(f"{len(manifest.client_files)}")
-        self.stat_labels["server"].setText(f"{len(manifest.server_files)}")
-        self.stat_labels["cf_mods"].setText(f"{len(manifest.curseforge_mods)}（标准包交给启动器下载）")
-        self.stat_labels["to_download"].setText(f"{len(manifest.local_files)}")
-        self.stat_labels["size"].setText(human_size(manifest.total_size))
-        self.stat_labels["runtime"].setText(runtime)
-
-        self.log(
-            f"√ 清单读取成功：{manifest.name}（{manifest.id}）"
-            f"共 {len(manifest.files)} 个文件，其中 CurseForge 模组 {len(manifest.curseforge_mods)} 个"
-        )
-        self.btn_download.setEnabled(True)
-
-    # ------------------------------------------------------------- ③ 下载
-    def on_download(self) -> None:
-        QMessageBox.information(
-            self,
-            "还没实现",
-            "下载与打包是下一步的工作。\n\n"
-            "要照参考项目补的部分：\n"
-            "  • 下载队列 + sha1 校验（FileDownloadService / DownloadQueue）\n"
-            "  • CurseForge fileId 校验（CurseforgeService）\n"
-            "  • 打成 CurseForge 格式的 zip（PackService / CurseforgeModpackExtensions）",
-        )
-
-
-def _set_busy_cursor(busy: bool) -> None:
-    """切换忙碌光标（成对调用，别漏了 restore）。"""
-    from PySide6.QtWidgets import QApplication
-
-    if busy:
-        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
-    elif QApplication.overrideCursor() is not None:
-        QApplication.restoreOverrideCursor()
+        task.finished.connect(_done)

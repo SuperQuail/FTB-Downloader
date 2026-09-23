@@ -7,6 +7,9 @@ CurseForge 格式整合包 zip。数据源是 FTB 官方接口（feed-the-beast.
 
 ![界面预览](docs/ui-preview.png)
 
+> 📖 **怎么用：看 [使用指导](docs/usage.md)** —— 带完整截图：添加整合包、等待清单、管理本地库、
+> 代理设置、常见问题。
+
 > **参考项目**：`reference/CTBModifiy-master/`（C# 写的 CurseTheBeast，2024 年后没再更新）。
 > 该目录已加进 `.gitignore`，只作为**只读参考**：接口怎么调、字段怎么解析、zip 怎么打，全部照它来。
 > 参考项目踩过的坑都记在 [`docs/ftb-api-notes.md`](docs/ftb-api-notes.md)：既有会让整份清单解析失败的字段类型问题，
@@ -23,6 +26,7 @@ uv run ruff check .                        # 代码检查
 uv run pytest                              # 跑测试
 uv add <包名>                              # 加依赖（别手改 requirements）
 uv run python scripts\smoke_ftb_api.py     # 命令行冒烟：不弹窗，直接跑一遍 FTB 接口
+uv run python scripts\make_guide_screenshots.py   # 重新生成 docs/guide/ 里的使用指导截图
 ```
 
 需要走代理时给 uv 带上环境变量（uv 认 `HTTP_PROXY` / `HTTPS_PROXY`）：
@@ -38,9 +42,13 @@ uv sync
 FTB_downloader/
 ├── pyproject.toml / uv.lock / .python-version   # uv 工程
 ├── main.py                      # 入口
-├── scripts/smoke_ftb_api.py     # 命令行冒烟
+├── scripts/
+│   ├── smoke_ftb_api.py         # 命令行冒烟
+│   └── make_guide_screenshots.py # 生成使用指导的截图
 ├── tests/                       # pytest（包内条目名的回归测试就在这）
 ├── docs/
+│   ├── usage.md                 # ← 使用指导（面向使用者）
+│   ├── guide/                   # 使用指导里的截图（脚本生成）
 │   ├── ftb-api-notes.md         # FTB / CurseForge 接口与打包格式笔记
 │   ├── ui-notes.md              # 配色取样 + 界面结构对照
 │   └── ui-preview.png           # 界面预览图（脚本生成）
@@ -68,7 +76,7 @@ FTB_downloader/
 | 位置 | 内容 | 参考实现 |
 | --- | --- | --- |
 | 左侧栏 | ＋添加 / 下载 / 我的整合包 / 发现 / 设置 / 关于，选中项绿底 | `ui/widgets/sidebar.py` |
-| 顶栏 | 搜索框 + GROUP BY（分类 / 状态 / 名称）+ SORT BY（添加时间 / 名称 / 体积） | `ui/widgets/topbar.py` |
+| 顶栏 | 搜索框（各页面都在）+ GROUP BY（分类 / 状态 / 名称）+ SORT BY（添加时间 / 名称 / 体积），后两者只在「我的整合包」页显示 | `ui/widgets/topbar.py` |
 | 正在准备 | 大卡片：封面 + 名称 + 状态 + 百分比 + 进度条 + ⚡速度 | `ui/widgets/cards.py:PackCard` |
 | 我的整合包 | 网格卡片，按 MC 版本分组，右键移除 | `ui/widgets/cards.py:PackTile` |
 | 底部状态栏 | 当前动作 / 代理 | `ui/main_window.py` |

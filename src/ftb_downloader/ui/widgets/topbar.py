@@ -41,14 +41,20 @@ class TopBar(QFrame):
             lambda: self.sort_changed.emit(self.combo_sort.currentData())
         )
 
+        # 每组筛选要单独套一个 QWidget 才藏得掉：直接把 combo 加进子布局的话，
+        # combo.parentWidget() 是 TopBar 本身，setVisible(False) 会把整条顶栏（含搜索框）一起藏掉。
+        self._filter_columns: list[QWidget] = []
         for caption, combo in (("GROUP BY", self.combo_group), ("SORT BY", self.combo_sort)):
-            column = QVBoxLayout()
-            column.setSpacing(4)
-            label = QLabel(caption)
+            column = QWidget(self)
+            box = QVBoxLayout(column)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(4)
+            label = QLabel(caption, column)
             label.setObjectName("FilterLabel")
-            column.addWidget(label)
-            column.addWidget(combo)
-            row.addLayout(column)
+            box.addWidget(label)
+            box.addWidget(combo)
+            row.addWidget(column)
+            self._filter_columns.append(column)
 
     def text(self) -> str:
         return self.search.text().strip()
@@ -57,8 +63,6 @@ class TopBar(QFrame):
         self.search.setPlaceholderText(text)
 
     def set_filters_visible(self, visible: bool) -> None:
-        for combo in (self.combo_group, self.combo_sort):
-            combo.setVisible(visible)
-            parent = combo.parentWidget()
-            if parent is not None:
-                parent.setVisible(visible)
+        """GROUP BY / SORT BY 只在「我的整合包」页有意义；搜索框则一直要在。"""
+        for column in self._filter_columns:
+            column.setVisible(visible)

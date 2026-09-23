@@ -69,10 +69,35 @@ Base：`https://api.feed-the-beast.com/v1/modpacks/public`　（**不需要 API 
 | `sha1` | 下载后校验用 |
 | `url` | 实测**全部非空**；失效文件要靠 `/mod/{sha1}` 重新找源 |
 
-包内相对路径的算法（对照 `FileEntry.WithArchiveEntryName()`）：
-把 `path` 和 `name` 逐段 `\` → `/`、去掉段首的 `.` 和首尾 `/`，再用 `/` 连接。
+包内相对路径的算法（`models/manifest.py:normalize_entry_name()`，对照**修好之后**的
+`FileEntry.WithArchiveEntryName()`）：把 `path` 和 `name` 逐段把 `\` → `/`、
+**按 `/` 拆开、丢掉空段和 `.` 段**，再用 `/` 连接。
 即 `./mods` + `FramedBlocks-10.6.2.jar` → `mods/FramedBlocks-10.6.2.jar`。
 另外：`mods/*.jar.disabled` 会把结尾的 `.disabled` 去掉（禁用状态的 mod 仍然按 jar 放）。
+
+### ⚠ 2.1 这里有两个能让整包装不上的坑
+
+1. **`path` 可能是 `./`**。本包 11429 条里就有这么一条：
+
+   ```json
+   { "path": "./", "name": "default-server.properties", "type": "resource" }
+   ```
+
+   如果实现写成「逐段去掉首尾 `/`」，`"./"` 会先变成空字符串、却仍然被拼进结果，
+   产出 `overrides//default-server.properties` 这种带空路径段的条目。启动器剥掉
+   `overrides/` 前缀后拿到的是 `/default-server.properties`，**在 Java 里这算绝对路径**，
+   `Path.resolve()` 会原样返回它、直接逃出目标目录，于是 HMCL 的 `Unzipper` 抛：
+
+   ```
+   java.io.IOException: Zip entry is trying to write outside of the destination directory:
+   overrides//default-server.properties
+   ```
+
+   整合包直接装不上（参考项目早期版本就是这个毛病，`FTB Skies 2_ Aero v1.12.1.zip` 中招）。
+   写包前再拿 `validate_entry_name()` 兜一道底。
+2. **不能用 `lstrip(".")` / `TrimStart('.')` 去前缀**。它会把 `path="./config"` 下的
+   `.gitkeep` 改名成 `gitkeep`；点号开头的文件 / 目录（`.gitkeep`、`.gitignore`、
+   `.content/`…）全都会走样。正确做法是把 `"./"` 拆成 `[".", ""]`，再把空段和 `.` 段丢掉。
 
 ---
 

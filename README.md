@@ -9,7 +9,8 @@ CurseForge 格式整合包 zip。数据源是 FTB 官方接口（feed-the-beast.
 
 > **参考项目**：`reference/CTBModifiy-master/`（C# 写的 CurseTheBeast，2024 年后没再更新）。
 > 该目录已加进 `.gitignore`，只作为**只读参考**：接口怎么调、字段怎么解析、zip 怎么打，全部照它来。
-> 参考项目踩过的坑（尤其是会让整份清单解析失败的字段类型问题）记在 [`docs/ftb-api-notes.md`](docs/ftb-api-notes.md)。
+> 参考项目踩过的坑都记在 [`docs/ftb-api-notes.md`](docs/ftb-api-notes.md)：既有会让整份清单解析失败的字段类型问题，
+> 也有会打出装不上的 zip 的包内条目名问题（见 §2.1，`FTB Skies 2_ Aero v1.12.1.zip` 就是被它干掉的）。
 
 ## 环境与运行（uv）
 
@@ -19,6 +20,7 @@ CurseForge 格式整合包 zip。数据源是 FTB 官方接口（feed-the-beast.
 uv sync                                    # 建 .venv + 按 uv.lock 装依赖
 uv run main.py                             # 启动 GUI
 uv run ruff check .                        # 代码检查
+uv run pytest                              # 跑测试
 uv add <包名>                              # 加依赖（别手改 requirements）
 uv run python scripts\smoke_ftb_api.py     # 命令行冒烟：不弹窗，直接跑一遍 FTB 接口
 ```
@@ -37,6 +39,7 @@ FTB_downloader/
 ├── pyproject.toml / uv.lock / .python-version   # uv 工程
 ├── main.py                      # 入口
 ├── scripts/smoke_ftb_api.py     # 命令行冒烟
+├── tests/                       # pytest（包内条目名的回归测试就在这）
 ├── docs/
 │   ├── ftb-api-notes.md         # FTB / CurseForge 接口与打包格式笔记
 │   ├── ui-notes.md              # 配色取样 + 界面结构对照

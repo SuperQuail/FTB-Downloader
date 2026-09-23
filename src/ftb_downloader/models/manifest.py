@@ -45,17 +45,46 @@ def as_int(value: Any, default: int = 0) -> int:
 
 
 def normalize_entry_name(*parts: str | None) -> str:
-    """拼出包内相对路径。算法对照 FileEntry.WithArchiveEntryName()：
-    逐段去掉开头的 '.' 和首尾 '/'，再统一用 '/' 连接。
+    """拼出包内相对路径。算法对照修好之后的 FileEntry.WithArchiveEntryName()：
+
+    统一分隔符 → 把每段按 '/' 拆开 → 丢掉空段和 "." 段。
+
+    ⚠ 两个必须守住的点（本项目就是被它们坑出来的）：
+      1. 绝对不能产出空路径段。FTB 清单里 path="./" 的条目（例如
+         default-server.properties）会拼出 "overrides//default-server.properties"，
+         启动器剥掉 "overrides/" 前缀后拿到的是 "/default-server.properties"，
+         在 Java 里这是绝对路径，HMCL 的 zip-slip 检查会直接抛
+         IOException: Zip entry is trying to write outside of the destination directory，
+         整个整合包装不上。
+      2. 不能用 lstrip(".") 去前缀。它会把 ".gitkeep" 改名成 "gitkeep"，
+         点号开头的文件/目录全都会走样。
     """
     segments: list[str] = []
     for part in parts:
-        if not part:
+        if not part or not part.strip():
             continue
-        segment = part.replace("\\", "/").lstrip(".").strip("/")
-        if segment:
-            segments.append(segment)
+        for segment in part.replace("\\", "/").split("/"):
+            if segment and segment != ".":
+                segments.append(segment)
     return "/".join(segments)
+
+
+def validate_entry_name(entry_name: str) -> str:
+    """校验包内条目名，合法就原样返回，否则抛 ValueError。
+
+    空段、"."/".." 段、首尾斜杠都属于非法：这类条目要么被启动器的 zip-slip
+    检查拒绝（HMCL），要么被解压到目标目录之外。写包之前务必过一遍，
+    别再把装不上的整合包发出去。
+    """
+    segments = entry_name.split("/")
+    if (
+        not entry_name
+        or entry_name.startswith("/")
+        or entry_name.endswith("/")
+        or any(segment in ("", ".", "..") for segment in segments)
+    ):
+        raise ValueError(f"非法的压缩包条目名：{entry_name!r}")
+    return entry_name
 
 
 @dataclass(slots=True)

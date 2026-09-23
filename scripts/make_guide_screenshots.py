@@ -146,9 +146,19 @@ def force_layout(app, window) -> None:
     app.processEvents()
 
 
+def grid_ready(window) -> bool:
+    """卡片是不是已经排完版了。
+
+    准备任务的 state 回调会 _refresh_lists() 把整个列表重建一遍，刚重建出来的卡片
+    还没拿到最终尺寸（Qt 默认 640x480）。排好版之后宽度才会等于 PackTile.WIDTH。
+    """
+    tiles = window.page_library.findChildren(PackTile)
+    return bool(tiles) and all(widget_rect(window, t).width() == PackTile.WIDTH for t in tiles)
+
+
 def first_row_rect(window, widget_type, count: int = 3) -> QRect | None:
     """取某一类控件里第一行的矩形，用来给整排卡片画框。"""
-    widgets = [w for w in window.page_library.findChildren(widget_type) if w.isVisible()]
+    widgets = window.page_library.findChildren(widget_type)
     if not widgets:
         return None
     widgets.sort(key=lambda w: (widget_rect(window, w).y(), widget_rect(window, w).x()))
@@ -281,6 +291,7 @@ def main() -> int:
     )
     settle(app, window, 25)
 
+    wait_for(app, lambda: grid_ready(window), 30, "库里卡片排版完成")
     force_layout(app, window)
 
     group = window.topbar.combo_group

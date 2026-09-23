@@ -18,8 +18,9 @@ import requests
 
 CURSEFORGE_API = "https://api.curseforge.com"
 
-#: 参考项目里硬编码的 key（CurseTheBeast/Services/HttpConfigService.cs）。
-#: 实测 2026-09 仍可用；如果哪天 403 了，就在设置里换成自己的 key。
+#: 和参考项目硬编码的是同一个 key（CurseTheBeast/Services/HttpConfigService.cs），实测 2026-09 仍可用。
+#: CurseForge 的接口就是这么设计的：社区里绝大多数相关工具都内置这同一个 key，用户自己也申请不到，
+#: 所以既不做成可配置项，也不在界面上露出来 —— 给用户看只会让人以为要自己填。
 DEFAULT_API_KEY = "$2a$10$KauzeIBqTRY2jwkx64A.Cep7cmWFGGYVncpqvfOCOee/90YPgkgfy"
 
 #: CurseForge 哈希算法编号：1 = SHA1

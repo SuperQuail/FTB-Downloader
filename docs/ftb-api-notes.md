@@ -122,6 +122,9 @@ https://edge.forgecdn.net/files/{fileId // 1000}/{fileId % 1000}/{urlencode(文�
 - `POST https://api.curseforge.com/v1/mods/files`，body `{"fileIds": [8780141, ...]}`，一次最多 50 个
 - Header 需要 `x-api-key`；参考项目在一处硬编码了一个 key（`Services/HttpConfigService.cs`），
   2026-09 实测仍然可用
+- 这个 key **不是给用户申请的**：CurseForge 的接口设计如此，社区里绝大多数相关工具内置的都是同一个。
+  本项目照抄同一个到 `api/curseforge.py`，并且**不在界面上暴露、也不做成可配置项** ——
+  用户既拿不到自己的 key，摆出来只会让人以为要自己填。
 - 返回 `data[]`：`id` / `modId`（= projectID）/ `fileName` / `fileLength` /
   `downloadUrl` / `hashes[{algo, value}]`，其中 **algo=1 是 sha1**，algo=2 是 murmur2
 - 用途（只有「标准包」需要）：拿返回的 sha1 和清单里的 sha1 比对，不一致说明这个 fileId 已经过期，

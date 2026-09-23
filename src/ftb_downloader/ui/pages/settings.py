@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ftb_downloader.api.curseforge import DEFAULT_API_KEY
 from ftb_downloader.net import system_proxy
 from ftb_downloader.services.library import data_dir
 from ftb_downloader.ui.widgets.common import Muted, PageTitle
@@ -56,11 +55,6 @@ class SettingsPage(QWidget):
         dir_row.addWidget(self.edit_dir, 1)
         dir_row.addWidget(button_open)
         form.addRow("数据目录", _wrap(dir_row))
-
-        # CurseForge key
-        self.edit_key = QLineEdit(DEFAULT_API_KEY)
-        self.edit_key.setMinimumWidth(320)
-        form.addRow("CurseForge API Key", self.edit_key)
 
         # 并行下载数（留给下一步的下载器）
         self.spin_threads = QSpinBox()
